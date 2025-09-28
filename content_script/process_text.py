@@ -197,7 +197,7 @@ def use_latex(word, render_latex, stepMC):
         return True
     if re.search("\([\d\.]+,[\d\.]+\)", word):
         return True
-    if re.match("-*\d+[.\,]*$", word):
+    if re.match(r"-*[\d\.,]+$", word):
         return True
     return False
 
@@ -233,6 +233,9 @@ def handle_word(word, coord=True):
         return word
 
     if not (any([op in word for op in supported_operators]) or any([op in word for op in supported_word_operators])):
+        # Handle thousand separators in standalone numbers like 1,234 → 1234
+        word = re.sub(r'\b(\d{1,3})(?:,(\d{3}))+\b', lambda m: m.group(0).replace(',', ''), word)
+
         word = re.sub("𝜃", "\\\\theta", word)
         word = re.sub("°", "\\\\degree", word)
         word = re.sub("θ", "\\\\theta", word)
@@ -282,7 +285,9 @@ def handle_word(word, coord=True):
     scientific_notation = re.findall("\(?([\d]{2,})\)?\*([\d]{2,})\*\*", word)
     word = re.sub(":sqrt", ": sqrt", word)
     square_roots = re.findall(r"sqrt\(([^,]*)\,([^\)]*)\)", word)
-    word = re.sub(",", "", word)
+    # Smart comma handling: only remove thousand separators, preserve function args and coordinates
+    # Remove thousand separators like 1,234 or 12,345,678 but preserve sqrt(a,b), (x,y), etc.
+    word = re.sub(r'\b(\d{1,3})(?:,(\d{3}))+\b', lambda m: m.group(0).replace(',', ''), word)
     for root in square_roots:
         word = re.sub(r"sqrt\("+re.escape(root[0])+re.escape(root[1])+"\)", r"sqrt("+root[0]+","+root[1]+")", word)
     word = re.sub(r"(^ln[\w])(\(+[\w])", "\g<1>*\g<2>", word)
