@@ -44,6 +44,11 @@ def preprocess_text_to_latex(text, tutoring=False, stepMC=False, render_latex="T
 
     if render_latex:
         text = str(text)
+        # Preserve LaTeX-style superscripts and subscripts before general character replacement
+        # Temporarily replace LaTeX notation to protect it from caret conversion
+        text = re.sub(r'\^{([^}]+)}', r'SUPSCR_PH_\g<1>_PH', text)
+        text = re.sub(r'_{([^}]+)}', r'SUBSCR_PH_\g<1>_PH', text)
+        # Apply general character replacements (including ^ to **)
         text = regex.sub(lambda match: replace[match.group(0)], text)
         # Don't convert brackets to parentheses if they contain:
         # 1. Coordinates/intervals: [1,5] or (2,3)
@@ -52,6 +57,9 @@ def preprocess_text_to_latex(text, tutoring=False, stepMC=False, render_latex="T
         has_chemistry = re.findall(r"\[[A-Z][a-z0-9]*\]|\[[A-Z][a-z]*[0-9]+\]|\[[A-Z]+[0-9]*\]", text)
         if not has_coordinates and not has_chemistry:
             text = regex.sub(lambda match: conditionally_replace[match.group(0)], text)
+        # Restore LaTeX notation after bracket processing
+        text = re.sub(r'SUPSCR_PH_([^_]+)_PH', r'^{\g<1>}', text)
+        text = re.sub(r'SUBSCR_PH_([^_]+)_PH', r'_{\g<1>}', text)
 
         #Account for space in sqrt(x, y)
         text = re.sub(r"sqrt[\s]?\(([^,]+),[\s]+([^\)])\)", r"sqrt(\g<1>,\g<2>)", text)
@@ -205,6 +213,32 @@ def handle_word(word, coord=True):
     latex_dic = {"=": "=", "U": " \cup ", "∩": " \cap ", "<=" : " \leq ", ">=" : " \geq ", "!=": " \\neq "}
     if word in latex_dic:
         return latex_dic[word]
+
+    # Handle mixed expressions with LaTeX notation and operators
+    # Convert LaTeX-style subscripts/superscripts to Python style for pytexit processing
+    if re.search(r'[\^_]\{[^}]+\}', word):
+        # Create a version for pytexit by converting LaTeX notation to Python
+        pytexit_word = word
+        # Convert ^{...} to **(...) for pytexit
+        pytexit_word = re.sub(r'\^{([^}]+)}', r'**(\g<1>)', pytexit_word)
+        # Convert _{...} to _... for pytexit (remove braces)
+        pytexit_word = re.sub(r'_{([^}]+)}', r'_\g<1>', pytexit_word)
+
+        # If word has operators, process with pytexit using converted version
+        if any([op in word for op in supported_operators if op != "_"]) or any([op in word for op in supported_word_operators]):
+            try:
+                processed = py2tex(pytexit_word, print_latex=False, print_formula=False, simplify_output=False)
+                # Post-process to fix LaTeX formatting
+                if processed:
+                    # Remove any $$ delimiters that py2tex might have added
+                    processed = processed.strip('$')
+                    return processed
+            except:
+                # If pytexit fails, fall back to preserving original LaTeX
+                return word
+        else:
+            # No operators, preserve original LaTeX notation
+            return word
 
     if r'/mat' in word:
         matches = re.finditer('/mat{.+?}', word)
