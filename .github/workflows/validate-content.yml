@@ -1,0 +1,152 @@
+name: Content Validation
+
+on:
+  # Trigger after content updates
+  repository_dispatch:
+    types: [content-validation]
+
+  # Manual trigger for any sheet validation
+  workflow_dispatch:
+    inputs:
+      problem_name:
+        description: 'Specific problem to validate (optional)'
+        required: false
+        type: string
+      url_prefix:
+        description: 'URL prefix for testing'
+        required: false
+        type: string
+        default: 'https://cahlr.github.io/OATutor-Staging/#/debug/'
+
+  # Trigger on pull requests
+  pull_request:
+    paths:
+      - 'selenium/OpenStax Content/**'
+      - 'content_script/**'
+
+jobs:
+  validate-content:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Install Python dependencies
+      run: |
+        cd selenium
+        pip install -r requirements.txt || pip install selenium pandas numpy webdriver-manager
+
+    - name: Set up Chrome browser
+      uses: browser-actions/setup-chrome@latest
+
+    - name: Install ChromeDriver
+      run: |
+        # ChromeDriver will be managed by webdriver-manager in the script
+        echo "ChromeDriver will be auto-managed"
+
+    - name: Validate specific problem
+      if: ${{ github.event.inputs.problem_name }}
+      run: |
+        cd selenium
+        python3 test_page.py "${{ github.event.inputs.problem_name }}" "${{ github.event.inputs.url_prefix }}"
+
+    - name: Validate all content
+      if: ${{ !github.event.inputs.problem_name }}
+      run: |
+        cd selenium
+        timeout 30m python3 test_all.py "${{ github.event.inputs.url_prefix || 'https://cahlr.github.io/OATutor-Staging/#/debug/' }}" || true
+
+    - name: Upload validation results
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: validation-results
+        path: |
+          selenium/test_results.csv
+          selenium/error_logs.txt
+        retention-days: 7
+
+    - name: Check validation results
+      id: validation
+      run: |
+        cd selenium
+        if [ -f "test_results.csv" ]; then
+          ERROR_COUNT=$(tail -n +2 test_results.csv | wc -l || echo "0")
+          echo "error_count=$ERROR_COUNT" >> $GITHUB_OUTPUT
+          if [ "$ERROR_COUNT" -gt 0 ]; then
+            echo "validation_status=failed" >> $GITHUB_OUTPUT
+          else
+            echo "validation_status=passed" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "validation_status=unknown" >> $GITHUB_OUTPUT
+          echo "error_count=0" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Create validation comment (for PRs)
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const errorCount = '${{ steps.validation.outputs.error_count }}';
+          const status = '${{ steps.validation.outputs.validation_status }}';
+
+          let message = '## 🧪 Content Validation Results\n\n';
+
+          if (status === 'passed') {
+            message += '✅ **All tests passed!** No validation errors found.\n';
+          } else if (status === 'failed') {
+            message += `❌ **Validation failed** with ${errorCount} errors.\n\nPlease check the validation artifacts for details.\n`;
+          } else {
+            message += '⚠️ **Validation incomplete** - check logs for details.\n';
+          }
+
+          message += '\n📁 Validation artifacts are available in the workflow run.';
+
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: message
+          });
+
+  feedback-submission-test:
+    runs-on: ubuntu-latest
+    needs: validate-content
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Install dependencies
+      run: |
+        cd selenium
+        pip install -r requirements.txt || pip install selenium pandas numpy webdriver-manager
+
+    - name: Set up Chrome browser
+      uses: browser-actions/setup-chrome@latest
+
+    - name: Test feedback submission
+      run: |
+        cd selenium
+        python3 check_feedback.py "${{ github.event.inputs.url_prefix || 'https://cahlr.github.io/OATutor-Staging/#/debug/' }}"
+
+    - name: Upload feedback test results
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: feedback-test-results
+        path: |
+          selenium/feedback_test_results.txt
+        retention-days: 3

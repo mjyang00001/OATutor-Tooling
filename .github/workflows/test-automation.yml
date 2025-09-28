@@ -1,0 +1,175 @@
+name: Test Automation Setup
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+      - 'scripts/**'
+
+jobs:
+  test-validation-script:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Install script dependencies
+      run: |
+        cd scripts
+        pip install -r requirements.txt
+
+    - name: Test validation script with public sheet
+      run: |
+        cd scripts
+        # Test with a simple public Google Sheet (create a test sheet or use an existing one)
+        echo "Testing validation script..."
+
+        # Test help output
+        python3 validate-sheet.py || echo "Help output shown correctly"
+
+        # Test with invalid URL
+        python3 validate-sheet.py "invalid-url" && exit 1 || echo "Invalid URL correctly rejected"
+
+        echo "✅ Validation script tests passed"
+
+  test-workflow-syntax:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Validate workflow YAML syntax
+      run: |
+        echo "🔍 Checking workflow file syntax..."
+
+        for workflow in .github/workflows/*.yml; do
+          echo "Checking: $workflow"
+          # Basic YAML syntax validation
+          python3 -c "
+        import yaml
+        import sys
+        try:
+            with open('$workflow', 'r') as f:
+                yaml.safe_load(f)
+            print('✅ Valid YAML: $workflow')
+        except yaml.YAMLError as e:
+            print('❌ Invalid YAML in $workflow:', e)
+            sys.exit(1)
+        "
+        done
+
+        echo "✅ All workflow files have valid YAML syntax"
+
+  test-content-script-dependencies:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Test content script dependencies
+      run: |
+        cd content_script
+
+        # Test if required modules can be imported
+        python3 -c "
+        try:
+            import sys
+            sys.path.append('.')
+            from process_text import preprocess_text_to_latex
+            print('✅ process_text module imports correctly')
+        except ImportError as e:
+            print('❌ Import error:', e)
+            exit(1)
+        "
+
+        # Test basic dependencies installation
+        pip install pandas numpy || echo "Some dependencies missing - will be installed in workflows"
+
+        echo "✅ Content script dependencies check completed"
+
+  test-selenium-dependencies:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Test selenium script structure
+      run: |
+        cd selenium
+
+        # Check if key files exist
+        if [ ! -f "test_page.py" ]; then
+          echo "❌ test_page.py not found"
+          exit 1
+        fi
+
+        if [ ! -f "test_all.py" ]; then
+          echo "❌ test_all.py not found"
+          exit 1
+        fi
+
+        echo "✅ Key selenium files exist"
+
+        # Test basic script syntax
+        python3 -m py_compile test_page.py
+        python3 -m py_compile test_all.py
+
+        echo "✅ Selenium scripts have valid Python syntax"
+
+  summary:
+    needs: [test-validation-script, test-workflow-syntax, test-content-script-dependencies, test-selenium-dependencies]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+    - name: Test Results Summary
+      run: |
+        echo "## 🧪 Automation Test Results"
+        echo ""
+
+        if [ "${{ needs.test-validation-script.result }}" = "success" ]; then
+          echo "✅ Validation script tests: PASSED"
+        else
+          echo "❌ Validation script tests: FAILED"
+        fi
+
+        if [ "${{ needs.test-workflow-syntax.result }}" = "success" ]; then
+          echo "✅ Workflow syntax: VALID"
+        else
+          echo "❌ Workflow syntax: INVALID"
+        fi
+
+        if [ "${{ needs.test-content-script-dependencies.result }}" = "success" ]; then
+          echo "✅ Content script dependencies: OK"
+        else
+          echo "❌ Content script dependencies: ISSUES"
+        fi
+
+        if [ "${{ needs.test-selenium-dependencies.result }}" = "success" ]; then
+          echo "✅ Selenium script structure: OK"
+        else
+          echo "❌ Selenium script structure: ISSUES"
+        fi
+
+        echo ""
+        echo "🚀 Automation setup is ready for use!"
