@@ -45,7 +45,12 @@ def preprocess_text_to_latex(text, tutoring=False, stepMC=False, render_latex="T
     if render_latex:
         text = str(text)
         text = regex.sub(lambda match: replace[match.group(0)], text)
-        if not re.findall("[\[|\(][-\d\s\w/]+,[-\d\s\w/]+[\)|\]]", text): #Checking to see if there are coordinates/intervals before replacing () with []
+        # Don't convert brackets to parentheses if they contain:
+        # 1. Coordinates/intervals: [1,5] or (2,3)
+        # 2. Chemical formulas: [CH3], [NH4], [H2O], etc.
+        has_coordinates = re.findall(r"[\[\(][-\d\s\w/]+,[-\d\s\w/]+[\)\]]", text)
+        has_chemistry = re.findall(r"\[[A-Z][a-z0-9]*\]|\[[A-Z][a-z]*[0-9]+\]|\[[A-Z]+[0-9]*\]", text)
+        if not has_coordinates and not has_chemistry:
             text = regex.sub(lambda match: conditionally_replace[match.group(0)], text)
 
         #Account for space in sqrt(x, y)
@@ -294,8 +299,13 @@ def handle_word(word, coord=True):
     word = re.sub(r"\\theta", r"theta", word)
     word = re.sub(r"←", r"getsgets", word)
     word = re.sub(r"\.\.\.", r"dotdotdot", word)
-    bracketsub = re.search("\[([^\(^\)]+)\]", word)
-    word = re.sub("\[([^\(^\)^\[^\]]+)\]", "bracketsub", word)
+    # Preserve chemistry notation brackets like [CH3], [NH4]+
+    chemistry_brackets = re.findall(r"\[[A-Z][a-z0-9]*\]|\[[A-Z][a-z]*[0-9]+\]|\[[A-Z]+[0-9]*\]", word)
+    if not chemistry_brackets:
+        bracketsub = re.search("\[([^\(^\)]+)\]", word)
+        word = re.sub("\[([^\(^\)^\[^\]]+)\]", "bracketsub", word)
+    else:
+        bracketsub = None
     # to handle -(.....) missing parenthesis instance
     while re.search("-\([^\w\d\(]", word):
         open_par_miss = re.search("-\([^\w\d]", word).start() + 1
