@@ -83,7 +83,11 @@ def preprocess_text_to_latex(text, tutoring=False, stepMC=False, render_latex="T
         word = words[i]
         word = re.sub(r"(\d)(?<![a-zA-Z])pi", r"\g<1>*pi", word)
         if use_latex(word, render_latex, stepMC):
-            if not re.findall("[\[|\(][\+\-\*/\(\)\d\s\w]+,[\+\-\*/\(\)\d\s\w]+[\)|\]]", word): # only add in space if is not coordinate
+            # Remove thousand separators BEFORE adding spaces to commas
+            # Only remove if not in coordinates/intervals like (1,2) or [3,4]
+            if not re.findall("[\[|\(][\+\-\*/\(\)\d\s\w]+,[\+\-\*/\(\)\d\s\w]+[\)|\]]", word):
+                # Remove thousand separators like 1,234 or 12,345,678
+                word = re.sub(r'\b(\d{1,3})(?:,(\d{3}))+\b', lambda m: m.group(0).replace(',', ''), word)
                 word = re.sub(",(\S)", ", \g<1>", word)
 
             strip_punc = word[-1] in "?.,:"
