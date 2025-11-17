@@ -117,7 +117,7 @@ jobs:
         echo "✅ Staging deployment completed"
 
     - name: Upload deployment package
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: staging-deployment-package
         path: content-deployment.tar.gz
@@ -203,7 +203,7 @@ jobs:
         echo "✅ Production deployment completed"
 
     - name: Upload production package
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: production-deployment-package
         path: production-content.tar.gz
