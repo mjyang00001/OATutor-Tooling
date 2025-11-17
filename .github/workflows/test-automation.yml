@@ -84,6 +84,9 @@ jobs:
       run: |
         cd content_script
 
+        # Install dependencies from requirements.txt
+        pip install -r requirements.txt
+
         # Test if required modules can be imported
         python3 -c "
         try:
@@ -95,9 +98,6 @@ jobs:
             print('❌ Import error:', e)
             exit(1)
         "
-
-        # Test basic dependencies installation
-        pip install pandas numpy || echo "Some dependencies missing - will be installed in workflows"
 
         echo "✅ Content script dependencies check completed"
 
