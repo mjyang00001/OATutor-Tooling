@@ -52,7 +52,23 @@ def get_sheet_with_retries(book, sheet_name, retries=5, delay=5):
     
 def get_sheet_online(spreadsheet_key, retries=5):
     scope = ['https://spreadsheets.google.com/feeds']
-    credentials = ServiceAccountCredentials.from_json_keyfile_name("/home/runner/work/oatutor-askoski-705644bfdf34.json", scope)
+    # Try multiple credential file locations
+    credential_paths = [
+        "credentials.json",  # Created by GitHub Actions workflow
+        "/home/runner/work/oatutor-askoski-705644bfdf34.json",  # Legacy GitHub Actions path
+        os.path.expanduser("~/credentials.json"),  # Home directory
+    ]
+
+    credentials_file = None
+    for path in credential_paths:
+        if os.path.exists(path):
+            credentials_file = path
+            break
+
+    if not credentials_file:
+        raise FileNotFoundError(f"Credentials file not found. Tried: {credential_paths}")
+
+    credentials = ServiceAccountCredentials.from_json_keyfile_name(credentials_file, scope)
     gc = gspread.authorize(credentials)
     
     attempt = 0

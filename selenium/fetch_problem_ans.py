@@ -7,7 +7,7 @@ import json
 from problem import *
 
 CURRENT_PATH = os.getcwd()
-CONTENT_PATH = os.path.join(dirname(CURRENT_PATH), 'OpenStax Content')
+CONTENT_PATH = os.path.join(CURRENT_PATH, 'OpenStax Content', 'content-pool')
 
 def get_all_content_filename(content_path=CONTENT_PATH):
     """
