@@ -37,7 +37,7 @@ def create_problem_json(name,title,body,oer,license,images=[],var_str='',latex=T
     title, title_latex = preprocess_text_to_latex(title, render_latex=latex, verbosity=verbosity)
     body, body_latex = preprocess_text_to_latex(body, render_latex=latex, verbosity=verbosity)
 
-    # TODO: fix "create_variabilization"
+    # Parse variabilization (validated in process_sheet.py validate_question)
     variabilization = create_variabilization(var_str)
 
     problem_dict = {

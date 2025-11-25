@@ -129,6 +129,10 @@ def validate_question(question, variabilization, latex, verbosity, old_path):
     error_message = ''
     scaff_lst = []
 
+    # Track variables for variabilization validation
+    problem_variables = {}
+    current_step_variables = {}
+
     if not question['Row Type'].str.contains('problem').any() and not question['Row Type'].str.contains(
             'Problem').any():
         raise Exception("Missing problem row")
@@ -145,6 +149,12 @@ def validate_question(question, variabilization, latex, verbosity, old_path):
     if not question['Row Type'].str.contains('step').any() and not question['Row Type'].str.contains('Step').any():
         raise Exception("Problem does not have step(s)")
 
+    # Validate problem row variabilization
+    if variabilization:
+        is_valid, warnings, problem_variables = validate_variabilization_format(problem_row.get("Variabilization", ""))
+        if warnings:
+            error_message = error_message + f"[Problem] Variabilization warnings: {'; '.join(warnings)}" + '\n'
+
     for index, row in question.iterrows():
         # checks row type
         try:
@@ -154,18 +164,43 @@ def validate_question(question, variabilization, latex, verbosity, old_path):
             row_type = row['Row Type'].strip().lower()
             if index != 0:
                 if row_type == "step":
+                    # Validate step and update step variables
                     validate_step(row, variabilization, latex, verbosity, old_path)
+
+                    if variabilization:
+                        is_valid, warnings, current_step_variables = validate_variabilization_format(row.get("Variabilization", ""))
+                        if warnings:
+                            error_message = error_message + f"[Step] Variabilization warnings: {'; '.join(warnings)}" + '\n'
+
+                        # Validate variable usage in step
+                        var_warnings = validate_variable_usage(row, {}, problem_variables)
+                        if var_warnings:
+                            error_message = error_message + f"[Step] Variable warnings: {'; '.join(var_warnings)}" + '\n'
 
                 elif row_type == "hint" and type(row["Answer"]) != float:
                     raise Exception("{} is \"hint\" but has answer".format(row["HintID"]))
 
                 elif (row_type == 'hint' or row_type == "scaffold") and type(row['Parent']) != float:
-                    scaff_lst, hint_dic = validate_hint_with_parent(row, scaff_lst, row_type, hint_dic, 
+                    scaff_lst, hint_dic = validate_hint_with_parent(row, scaff_lst, row_type, hint_dic,
                                             previous_tutor, variabilization, latex, verbosity, old_path)
 
+                    # Validate variable usage in hint/scaffold
+                    if variabilization:
+                        var_warnings = validate_variable_usage(row, current_step_variables, problem_variables)
+                        if var_warnings:
+                            row_id = row.get("HintID", "unknown")
+                            error_message = error_message + f"[{row_type.capitalize()} {row_id}] Variable warnings: {'; '.join(var_warnings)}" + '\n'
+
                 elif row_type == "hint" or row_type == "scaffold":
-                    previous_tutor, hint_dic = validate_hint_without_parent(row, scaff_lst, row_type, 
+                    previous_tutor, hint_dic = validate_hint_without_parent(row, scaff_lst, row_type,
                                                 hint_dic, variabilization, latex, verbosity, old_path)
+
+                    # Validate variable usage in hint/scaffold
+                    if variabilization:
+                        var_warnings = validate_variable_usage(row, current_step_variables, problem_variables)
+                        if var_warnings:
+                            row_id = row.get("HintID", "unknown")
+                            error_message = error_message + f"[{row_type.capitalize()} {row_id}] Variable warnings: {'; '.join(var_warnings)}" + '\n'
 
         except Exception as e:
             error_message = error_message + str(e) + '\n'
