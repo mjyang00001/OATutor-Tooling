@@ -164,3 +164,91 @@ def validate_hint_without_parent(row, scaff_lst, row_type, hint_dic, variabiliza
         hint_dic[row["HintID"]] = full_id
 
     return row, hint_dic
+
+
+def extract_variables_from_text(text):
+    """
+    Extract all @{variable} references from text.
+    Returns a set of variable names.
+    """
+    if not text or type(text) == float or type(text) == np.float64:
+        return set()
+
+    import re
+    # Find all @{variable_name} patterns
+    matches = re.findall(r'@\{(\w+)\}', str(text))
+    return set(matches)
+
+
+def validate_variabilization_format(var_str):
+    """
+    Validate that variabilization string is in correct format.
+    Returns (is_valid, warnings, var_dict)
+    Lenient mode: returns warnings but still returns var_dict
+    """
+    if not var_str or type(var_str) == float:
+        return True, [], {}
+
+    warnings = []
+
+    try:
+        var_dict = create_variabilization(var_str)
+
+        # Check that all variables have the same number of values
+        if var_dict:
+            value_counts = [len(values) for values in var_dict.values()]
+            if len(set(value_counts)) > 1:
+                counts_str = ", ".join([f"{var}:{len(vals)}" for var, vals in var_dict.items()])
+                warnings.append(f"Inconsistent value counts - {counts_str}")
+
+        return True, warnings, var_dict
+    except Exception as e:
+        warnings.append(f"Invalid variabilization format: {str(e)}")
+        return False, warnings, {}
+
+
+def validate_variable_usage(row, step_variables, problem_variables):
+    """
+    Validate that all @{variables} used in a row are defined.
+    Lenient mode: returns warnings instead of errors
+
+    step_variables: dict of variables defined in the current step
+    problem_variables: dict of variables defined in the problem
+    row: the current row being validated
+
+    Returns list of warning messages
+    """
+    warnings = []
+
+    # Extract variables used in this row
+    used_vars = set()
+    used_vars.update(extract_variables_from_text(row.get("Title", "")))
+    used_vars.update(extract_variables_from_text(row.get("Body Text", "")))
+    used_vars.update(extract_variables_from_text(row.get("Answer", "")))
+
+    if not used_vars:
+        return warnings  # No variables used, nothing to validate
+
+    # Get variables defined in this row
+    is_valid, format_warnings, row_vars = validate_variabilization_format(row.get("Variabilization", ""))
+    warnings.extend(format_warnings)
+
+    if not is_valid:
+        return warnings  # Format error already reported
+
+    # Combine all available variables (problem + step + row)
+    available_vars = set(problem_variables.keys()) | set(step_variables.keys()) | set(row_vars.keys())
+
+    # Check for undefined variables
+    undefined = used_vars - available_vars
+    if undefined:
+        warnings.append(f"Undefined variables: {', '.join(sorted(undefined))}")
+
+    # Check for unused variables (only for row's own variables, not inherited)
+    if row_vars:
+        defined_in_row = set(row_vars.keys())
+        unused = defined_in_row - used_vars
+        if unused:
+            warnings.append(f"Unused variables (defined but not used): {', '.join(sorted(unused))}")
+
+    return warnings

@@ -44,9 +44,22 @@ def preprocess_text_to_latex(text, tutoring=False, stepMC=False, render_latex="T
 
     if render_latex:
         text = str(text)
+        # Preserve LaTeX-style superscripts and subscripts before general character replacement
+        # Temporarily replace LaTeX notation to protect it from caret conversion
+        text = re.sub(r'\^{([^}]+)}', r'SUPSCR_PH_\g<1>_PH', text)
+        text = re.sub(r'_{([^}]+)}', r'SUBSCR_PH_\g<1>_PH', text)
+        # Apply general character replacements (including ^ to **)
         text = regex.sub(lambda match: replace[match.group(0)], text)
-        if not re.findall("[\[|\(][-\d\s\w/]+,[-\d\s\w/]+[\)|\]]", text): #Checking to see if there are coordinates/intervals before replacing () with []
+        # Don't convert brackets to parentheses if they contain:
+        # 1. Coordinates/intervals: [1,5] or (2,3)
+        # 2. Chemical formulas: [CH3], [NH4], [H2O], etc.
+        has_coordinates = re.findall(r"[\[\(][-\d\s\w/]+,[-\d\s\w/]+[\)\]]", text)
+        has_chemistry = re.findall(r"\[[A-Z][a-z0-9]*\]|\[[A-Z][a-z]*[0-9]+\]|\[[A-Z]+[0-9]*\]", text)
+        if not has_coordinates and not has_chemistry:
             text = regex.sub(lambda match: conditionally_replace[match.group(0)], text)
+        # Restore LaTeX notation after bracket processing
+        text = re.sub(r'SUPSCR_PH_([^_]+)_PH', r'^{\g<1>}', text)
+        text = re.sub(r'SUBSCR_PH_([^_]+)_PH', r'_{\g<1>}', text)
 
         #Account for space in sqrt(x, y)
         text = re.sub(r"sqrt[\s]?\(([^,]+),[\s]+([^\)])\)", r"sqrt(\g<1>,\g<2>)", text)
@@ -192,7 +205,7 @@ def use_latex(word, render_latex, stepMC):
         return True
     if re.search("\([\d\.]+,[\d\.]+\)", word):
         return True
-    if re.match("-*\d+[.\,]*$", word):
+    if re.match(r"-*[\d\.,]+$", word):
         return True
     return False
 
@@ -200,6 +213,32 @@ def handle_word(word, coord=True):
     latex_dic = {"=": "=", "U": " \cup ", "∩": " \cap ", "<=" : " \leq ", ">=" : " \geq ", "!=": " \\neq "}
     if word in latex_dic:
         return latex_dic[word]
+
+    # Handle mixed expressions with LaTeX notation and operators
+    # Convert LaTeX-style subscripts/superscripts to Python style for pytexit processing
+    if re.search(r'[\^_]\{[^}]+\}', word):
+        # Create a version for pytexit by converting LaTeX notation to Python
+        pytexit_word = word
+        # Convert ^{...} to **(...) for pytexit
+        pytexit_word = re.sub(r'\^{([^}]+)}', r'**(\g<1>)', pytexit_word)
+        # Convert _{...} to _... for pytexit (remove braces)
+        pytexit_word = re.sub(r'_{([^}]+)}', r'_\g<1>', pytexit_word)
+
+        # If word has operators, process with pytexit using converted version
+        if any([op in word for op in supported_operators if op != "_"]) or any([op in word for op in supported_word_operators]):
+            try:
+                processed = py2tex(pytexit_word, print_latex=False, print_formula=False, simplify_output=False)
+                # Post-process to fix LaTeX formatting
+                if processed:
+                    # Remove any $$ delimiters that py2tex might have added
+                    processed = processed.strip('$')
+                    return processed
+            except:
+                # If pytexit fails, fall back to preserving original LaTeX
+                return word
+        else:
+            # No operators, preserve original LaTeX notation
+            return word
 
     if r'/mat' in word:
         matches = re.finditer('/mat{.+?}', word)
@@ -228,6 +267,9 @@ def handle_word(word, coord=True):
         return word
 
     if not (any([op in word for op in supported_operators]) or any([op in word for op in supported_word_operators])):
+        # Handle thousand separators in standalone numbers like 1,234 → 1234
+        word = re.sub(r'\b(\d{1,3})(?:,(\d{3}))+\b', lambda m: m.group(0).replace(',', ''), word)
+
         word = re.sub("𝜃", "\\\\theta", word)
         word = re.sub("°", "\\\\degree", word)
         word = re.sub("θ", "\\\\theta", word)
@@ -277,7 +319,9 @@ def handle_word(word, coord=True):
     scientific_notation = re.findall("\(?([\d]{2,})\)?\*([\d]{2,})\*\*", word)
     word = re.sub(":sqrt", ": sqrt", word)
     square_roots = re.findall(r"sqrt\(([^,]*)\,([^\)]*)\)", word)
-    word = re.sub(",", "", word)
+    # Smart comma handling: only remove thousand separators, preserve function args and coordinates
+    # Remove thousand separators like 1,234 or 12,345,678 but preserve sqrt(a,b), (x,y), etc.
+    word = re.sub(r'\b(\d{1,3})(?:,(\d{3}))+\b', lambda m: m.group(0).replace(',', ''), word)
     for root in square_roots:
         word = re.sub(r"sqrt\("+re.escape(root[0])+re.escape(root[1])+"\)", r"sqrt("+root[0]+","+root[1]+")", word)
     word = re.sub(r"(^ln[\w])(\(+[\w])", "\g<1>*\g<2>", word)
@@ -294,8 +338,13 @@ def handle_word(word, coord=True):
     word = re.sub(r"\\theta", r"theta", word)
     word = re.sub(r"←", r"getsgets", word)
     word = re.sub(r"\.\.\.", r"dotdotdot", word)
-    bracketsub = re.search("\[([^\(^\)]+)\]", word)
-    word = re.sub("\[([^\(^\)^\[^\]]+)\]", "bracketsub", word)
+    # Preserve chemistry notation brackets like [CH3], [NH4]+
+    chemistry_brackets = re.findall(r"\[[A-Z][a-z0-9]*\]|\[[A-Z][a-z]*[0-9]+\]|\[[A-Z]+[0-9]*\]", word)
+    if not chemistry_brackets:
+        bracketsub = re.search("\[([^\(^\)]+)\]", word)
+        word = re.sub("\[([^\(^\)^\[^\]]+)\]", "bracketsub", word)
+    else:
+        bracketsub = None
     # to handle -(.....) missing parenthesis instance
     while re.search("-\([^\w\d\(]", word):
         open_par_miss = re.search("-\([^\w\d]", word).start() + 1
