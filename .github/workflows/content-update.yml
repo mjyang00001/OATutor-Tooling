@@ -1,0 +1,132 @@
+name: Automated Content Update
+
+on:
+  # Trigger on manual dispatch with sheet URL
+  workflow_dispatch:
+    inputs:
+      sheet_url:
+        description: 'Google Sheet URL to process'
+        required: false
+        type: string
+      sheet_name:
+        description: 'Specific sheet name (optional)'
+        required: false
+        type: string
+      full_update:
+        description: 'Full content regeneration'
+        required: false
+        type: boolean
+        default: false
+
+  # Trigger on schedule (daily check for updates)
+  schedule:
+    - cron: '0 6 * * *'  # 6 AM UTC daily
+
+  # Trigger on webhook from Google Sheets (when implemented)
+  repository_dispatch:
+    types: [sheet-updated]
+
+jobs:
+  update-content:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        fetch-depth: 0
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Install dependencies
+      run: |
+        cd content_script
+        pip install -r requirements.txt || pip install pandas numpy gspread gspread-dataframe oauth2client openpyxl
+
+    - name: Set up Google Sheets credentials
+      run: |
+        echo '${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}' > content_script/credentials.json
+      env:
+        GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
+
+    - name: Process specific sheet (if provided)
+      if: ${{ github.event.inputs.sheet_url }}
+      run: |
+        cd content_script
+        # Extract sheet key from URL
+        SHEET_KEY=$(echo "${{ github.event.inputs.sheet_url }}" | grep -oP '/spreadsheets/d/\K[a-zA-Z0-9-_]+')
+        SHEET_NAME="${{ github.event.inputs.sheet_name }}"
+        if [ -z "$SHEET_NAME" ]; then
+          python3 process_sheet.py online "$SHEET_KEY"
+        else
+          python3 process_sheet.py online "$SHEET_KEY" "$SHEET_NAME"
+        fi
+
+    - name: Process all content (full update)
+      if: ${{ github.event.inputs.full_update == 'true' || github.event_name == 'schedule' }}
+      run: |
+        cd content_script
+        python3 final.py online full
+
+    - name: Process incremental updates
+      if: ${{ !github.event.inputs.sheet_url && github.event.inputs.full_update != 'true' && github.event_name != 'schedule' }}
+      run: |
+        cd content_script
+        python3 final.py online
+
+    - name: Check for content changes
+      id: changes
+      run: |
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "changes=true" >> $GITHUB_OUTPUT
+          git add .
+          git config user.name "Content Auto-Update Bot"
+          git config user.email "noreply@oatutor.io"
+          git commit -m "🤖 Automated content update
+
+          Generated from: ${{ github.event.inputs.sheet_url || 'scheduled update' }}
+          Trigger: ${{ github.event_name }}
+          Full update: ${{ github.event.inputs.full_update || 'false' }}"
+        else
+          echo "changes=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Push changes
+      if: steps.changes.outputs.changes == 'true'
+      run: |
+        git push origin ${{ github.ref_name }}
+
+    - name: Trigger validation
+      if: steps.changes.outputs.changes == 'true'
+      uses: peter-evans/repository-dispatch@v2
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        event-type: content-validation
+        client-payload: '{"ref": "${{ github.ref }}", "sha": "${{ github.sha }}"}'
+
+    - name: Clean up credentials
+      if: always()
+      run: |
+        rm -f content_script/credentials.json
+
+  notify:
+    needs: update-content
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+    - name: Notify success
+      if: needs.update-content.result == 'success'
+      run: |
+        echo "✅ Content update completed successfully"
+        # Add Slack/email notification here if needed
+
+    - name: Notify failure
+      if: needs.update-content.result == 'failure'
+      run: |
+        echo "❌ Content update failed"
+        # Add error notification here

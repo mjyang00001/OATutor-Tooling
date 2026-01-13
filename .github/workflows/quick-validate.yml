@@ -1,0 +1,276 @@
+name: Quick Document Validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      sheet_url:
+        description: 'Google Sheet URL to validate'
+        required: true
+        type: string
+      sheet_name:
+        description: 'Specific sheet/tab name (leave empty for all)'
+        required: false
+        type: string
+      validate_only:
+        description: 'Only validate, do not update content'
+        required: false
+        type: boolean
+        default: true
+      test_staging:
+        description: 'Run validation tests on staging'
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  quick-validation:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Install dependencies
+      run: |
+        cd content_script
+        pip install -r requirements.txt || pip install pandas numpy gspread gspread-dataframe oauth2client openpyxl
+
+    - name: Set up Google Sheets credentials
+      run: |
+        echo '${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}' > content_script/credentials.json
+      env:
+        GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
+
+    - name: Extract sheet information
+      id: sheet_info
+      run: |
+        SHEET_URL="${{ github.event.inputs.sheet_url }}"
+
+        # Extract sheet key from URL
+        SHEET_KEY=$(echo "$SHEET_URL" | grep -oP '/spreadsheets/d/\K[a-zA-Z0-9-_]+' || echo "")
+
+        if [ -z "$SHEET_KEY" ]; then
+          echo "❌ Invalid Google Sheet URL format"
+          exit 1
+        fi
+
+        echo "sheet_key=$SHEET_KEY" >> $GITHUB_OUTPUT
+        echo "sheet_name=${{ github.event.inputs.sheet_name }}" >> $GITHUB_OUTPUT
+
+        echo "📊 Processing sheet: $SHEET_KEY"
+        if [ -n "${{ github.event.inputs.sheet_name }}" ]; then
+          echo "📋 Tab: ${{ github.event.inputs.sheet_name }}"
+        fi
+
+    - name: Validate sheet format and content
+      id: validate
+      run: |
+        cd content_script
+
+        # Create a validation script that checks format without generating full content
+        cat > validate_sheet.py << 'EOF'
+        import sys
+        import pandas as pd
+        import gspread
+        from oauth2client.service_account import ServiceAccountCredentials
+        import json
+
+        def validate_sheet_format(sheet_key, sheet_name=None):
+            try:
+                # Set up credentials
+                scope = ["https://spreadsheets.google.com/feeds",
+                        "https://www.googleapis.com/auth/drive"]
+                creds = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
+                client = gspread.authorize(creds)
+
+                # Open the sheet
+                sheet = client.open_by_key(sheet_key)
+
+                if sheet_name:
+                    worksheet = sheet.worksheet(sheet_name)
+                    worksheets = [worksheet]
+                else:
+                    worksheets = sheet.worksheets()
+
+                validation_results = []
+
+                for ws in worksheets:
+                    result = {"sheet_name": ws.title, "errors": [], "warnings": []}
+
+                    # Get all data
+                    data = ws.get_all_records()
+
+                    if not data:
+                        result["errors"].append("Sheet is empty")
+                        validation_results.append(result)
+                        continue
+
+                    df = pd.DataFrame(data)
+
+                    # Check required headers
+                    required_headers = [
+                        "Problem Name", "Row Type", "Title", "Body Text",
+                        "Answer", "answerType", "HintID", "Dependency",
+                        "mcChoices", "Images (space delimited)", "Parent",
+                        "OER src", "openstax KC", "KC", "Taxonomy"
+                    ]
+
+                    missing_headers = [h for h in required_headers if h not in df.columns]
+                    if missing_headers:
+                        result["errors"].extend([f"Missing header: {h}" for h in missing_headers])
+
+                    # Check for problems without steps
+                    if not result["errors"]:
+                        problems = df[df['Row Type'] == 'problem']['Problem Name'].unique()
+                        for problem in problems:
+                            problem_rows = df[df['Problem Name'] == problem]
+                            if len(problem_rows[problem_rows['Row Type'] == 'step']) == 0:
+                                result["warnings"].append(f"Problem '{problem}' has no steps")
+
+                    # Check for empty required fields
+                    for _, row in df.iterrows():
+                        if row['Row Type'] == 'problem' and pd.isna(row['Problem Name']):
+                            result["errors"].append("Problem row missing Problem Name")
+                        if row['Row Type'] in ['step', 'scaffold'] and pd.isna(row['Answer']):
+                            result["warnings"].append("Step/scaffold missing answer")
+
+                    validation_results.append(result)
+
+                return validation_results
+
+            except Exception as e:
+                return [{"sheet_name": "ERROR", "errors": [str(e)], "warnings": []}]
+
+        if __name__ == "__main__":
+            sheet_key = sys.argv[1]
+            sheet_name = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] else None
+
+            results = validate_sheet_format(sheet_key, sheet_name)
+
+            total_errors = sum(len(r["errors"]) for r in results)
+            total_warnings = sum(len(r["warnings"]) for r in results)
+
+            print(f"VALIDATION_SUMMARY: {total_errors} errors, {total_warnings} warnings")
+
+            for result in results:
+                print(f"\n📋 Sheet: {result['sheet_name']}")
+                if result["errors"]:
+                    print("❌ Errors:")
+                    for error in result["errors"]:
+                        print(f"  - {error}")
+                if result["warnings"]:
+                    print("⚠️ Warnings:")
+                    for warning in result["warnings"]:
+                        print(f"  - {warning}")
+                if not result["errors"] and not result["warnings"]:
+                    print("✅ No issues found")
+
+            # Output for GitHub Actions
+            with open("validation_summary.txt", "w") as f:
+                f.write(f"errors={total_errors}\n")
+                f.write(f"warnings={total_warnings}\n")
+        EOF
+
+        python3 validate_sheet.py "${{ steps.sheet_info.outputs.sheet_key }}" "${{ steps.sheet_info.outputs.sheet_name }}"
+
+        # Read the summary
+        if [ -f "validation_summary.txt" ]; then
+          source validation_summary.txt
+          echo "error_count=$errors" >> $GITHUB_OUTPUT
+          echo "warning_count=$warnings" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Generate test content (if validation passed)
+      if: ${{ steps.validate.outputs.error_count == '0' && github.event.inputs.validate_only != 'true' }}
+      run: |
+        cd content_script
+
+        SHEET_KEY="${{ steps.sheet_info.outputs.sheet_key }}"
+        SHEET_NAME="${{ steps.sheet_info.outputs.sheet_name }}"
+
+        if [ -n "$SHEET_NAME" ]; then
+          python3 process_sheet.py online "$SHEET_KEY" "$SHEET_NAME"
+        else
+          python3 process_sheet.py online "$SHEET_KEY"
+        fi
+
+    - name: Run staging validation tests
+      if: ${{ github.event.inputs.test_staging == 'true' && steps.validate.outputs.error_count == '0' }}
+      run: |
+        cd selenium
+        pip install selenium pandas numpy webdriver-manager
+
+        # Find any new problems generated and test them
+        if [ -d "../selenium/OpenStax Content/content-pool" ]; then
+          # Get a sample of problems to test
+          PROBLEMS=$(find "../selenium/OpenStax Content/content-pool" -name "*.json" -not -path "*/steps/*" | head -5 | xargs -I {} basename {} .json)
+
+          for problem in $PROBLEMS; do
+            echo "Testing problem: $problem"
+            timeout 2m python3 test_page.py "$problem" "https://cahlr.github.io/OATutor-Staging/#/debug/" || echo "Test timed out or failed for $problem"
+          done
+        fi
+
+    - name: Create validation report
+      if: always()
+      run: |
+        cat > validation_report.md << EOF
+        # 📊 Quick Validation Report
+
+        **Sheet URL:** ${{ github.event.inputs.sheet_url }}
+        **Sheet/Tab:** ${{ github.event.inputs.sheet_name || 'All sheets' }}
+        **Validation Mode:** ${{ github.event.inputs.validate_only == 'true' && 'Format check only' || 'Full validation' }}
+
+        ## Results Summary
+
+        - **Errors:** ${{ steps.validate.outputs.error_count || '0' }}
+        - **Warnings:** ${{ steps.validate.outputs.warning_count || '0' }}
+
+        ## Status
+
+        ${{ steps.validate.outputs.error_count == '0' && '✅ Validation passed!' || '❌ Validation failed - see details above' }}
+
+        ${{ github.event.inputs.validate_only != 'true' && steps.validate.outputs.error_count == '0' && '📦 Test content generated successfully' || '' }}
+
+        ${{ github.event.inputs.test_staging == 'true' && '🧪 Staging tests completed' || '' }}
+
+        ---
+        *Generated by OATutor Quick Validation*
+        EOF
+
+    - name: Upload validation report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: validation-report
+        path: |
+          validation_report.md
+          content_script/validation_summary.txt
+        retention-days: 7
+
+    - name: Clean up credentials
+      if: always()
+      run: |
+        rm -f content_script/credentials.json
+
+    - name: Summary
+      if: always()
+      run: |
+        echo "## 📊 Quick Validation Complete"
+        echo ""
+        echo "**Results:**"
+        echo "- Errors: ${{ steps.validate.outputs.error_count || '0' }}"
+        echo "- Warnings: ${{ steps.validate.outputs.warning_count || '0' }}"
+        echo ""
+        if [ "${{ steps.validate.outputs.error_count }}" = "0" ]; then
+          echo "✅ **Validation successful!** Your sheet format is valid."
+        else
+          echo "❌ **Validation failed.** Please check the detailed report in artifacts."
+        fi
+        echo ""
+        echo "📁 Download the validation report from the workflow artifacts for details."

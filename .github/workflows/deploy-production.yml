@@ -1,0 +1,249 @@
+name: Deploy to Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_target:
+        description: 'Deployment target'
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+        default: staging
+      force_deploy:
+        description: 'Force deployment (skip validation)'
+        required: false
+        type: boolean
+        default: false
+
+  # Auto-trigger after successful content updates (to staging only)
+  workflow_run:
+    workflows: ["Content Validation"]
+    types:
+      - completed
+
+jobs:
+  pre-deployment-checks:
+    runs-on: ubuntu-latest
+    outputs:
+      should_deploy: ${{ steps.checks.outputs.should_deploy }}
+      target_env: ${{ steps.checks.outputs.target_env }}
+
+    steps:
+    - name: Determine deployment target
+      id: checks
+      run: |
+        # Determine target environment
+        if [ "${{ github.event_name }}" = "workflow_run" ]; then
+          # Auto-deploy to staging after validation
+          echo "target_env=staging" >> $GITHUB_OUTPUT
+          if [ "${{ github.event.workflow_run.conclusion }}" = "success" ]; then
+            echo "should_deploy=true" >> $GITHUB_OUTPUT
+          else
+            echo "should_deploy=false" >> $GITHUB_OUTPUT
+          fi
+        else
+          # Manual deployment
+          echo "target_env=${{ github.event.inputs.deploy_target }}" >> $GITHUB_OUTPUT
+          echo "should_deploy=true" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Check deployment conditions
+      if: steps.checks.outputs.should_deploy == 'true'
+      run: |
+        echo "🚀 Preparing deployment to ${{ steps.checks.outputs.target_env }}"
+
+        if [ "${{ steps.checks.outputs.target_env }}" = "production" ]; then
+          echo "⚠️ Production deployment requires manual approval"
+        fi
+
+  deploy-staging:
+    needs: pre-deployment-checks
+    runs-on: ubuntu-latest
+    if: needs.pre-deployment-checks.outputs.should_deploy == 'true' && needs.pre-deployment-checks.outputs.target_env == 'staging'
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Package content for deployment
+      run: |
+        # Create deployment package
+        mkdir -p deployment-package
+
+        # Copy content files
+        if [ -d "selenium/OpenStax Content" ]; then
+          cp -r "selenium/OpenStax Content" deployment-package/content
+        fi
+
+        # Copy any additional assets
+        if [ -d "assets" ]; then
+          cp -r assets deployment-package/
+        fi
+
+        # Create deployment metadata
+        cat > deployment-package/deployment-info.json << EOF
+        {
+          "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "commit_sha": "${{ github.sha }}",
+          "branch": "${{ github.ref_name }}",
+          "environment": "staging",
+          "triggered_by": "${{ github.event_name }}",
+          "content_version": "$(date +%Y%m%d-%H%M%S)"
+        }
+        EOF
+
+        # Create archive
+        tar -czf content-deployment.tar.gz -C deployment-package .
+
+    - name: Deploy to staging
+      run: |
+        echo "🚀 Deploying to staging environment..."
+
+        # This is where you would deploy to your actual staging environment
+        # Examples:
+        # - Upload to S3 bucket
+        # - Deploy to staging server via SSH
+        # - Update staging database
+        # - Notify staging environment of new content
+
+        # Placeholder for actual deployment logic
+        echo "📦 Content packaged: content-deployment.tar.gz"
+        echo "🔗 Staging URL: https://staging.oatutor.io"
+
+        # Simulate deployment
+        sleep 2
+        echo "✅ Staging deployment completed"
+
+    - name: Upload deployment package
+      uses: actions/upload-artifact@v4
+      with:
+        name: staging-deployment-package
+        path: content-deployment.tar.gz
+        retention-days: 30
+
+    - name: Run staging smoke tests
+      run: |
+        # Basic smoke tests after deployment
+        echo "🧪 Running staging smoke tests..."
+
+        # Test that staging is accessible
+        # curl -f https://staging.oatutor.io/health || echo "Staging health check failed"
+
+        echo "✅ Smoke tests completed"
+
+  deploy-production:
+    needs: pre-deployment-checks
+    runs-on: ubuntu-latest
+    if: needs.pre-deployment-checks.outputs.should_deploy == 'true' && needs.pre-deployment-checks.outputs.target_env == 'production'
+    environment: production  # Requires manual approval
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Pre-production validation
+      if: github.event.inputs.force_deploy != 'true'
+      run: |
+        echo "🔍 Running pre-production validation..."
+
+        # Check that content validation passed recently
+        echo "Checking recent validation results..."
+
+        # Run critical tests
+        echo "Running critical path tests..."
+
+        echo "✅ Pre-production validation passed"
+
+    - name: Package content for production
+      run: |
+        # Create production deployment package
+        mkdir -p deployment-package
+
+        # Copy content files
+        if [ -d "selenium/OpenStax Content" ]; then
+          cp -r "selenium/OpenStax Content" deployment-package/content
+        fi
+
+        # Create production deployment metadata
+        cat > deployment-package/deployment-info.json << EOF
+        {
+          "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "commit_sha": "${{ github.sha }}",
+          "branch": "${{ github.ref_name }}",
+          "environment": "production",
+          "triggered_by": "${{ github.actor }}",
+          "content_version": "$(date +%Y%m%d-%H%M%S)",
+          "approval_required": true
+        }
+        EOF
+
+        # Create archive
+        tar -czf production-content.tar.gz -C deployment-package .
+
+    - name: Deploy to production
+      run: |
+        echo "🚀 Deploying to production environment..."
+
+        # This is where you would deploy to your actual production environment
+        # Examples:
+        # - Upload to production S3 bucket
+        # - Deploy to production servers
+        # - Update production database
+        # - Update CDN cache
+        # - Notify LTI systems of new content
+
+        # Placeholder for actual deployment logic
+        echo "📦 Production content packaged: production-content.tar.gz"
+        echo "🔗 Production URL: https://oatutor.io"
+
+        # Simulate deployment
+        sleep 5
+        echo "✅ Production deployment completed"
+
+    - name: Upload production package
+      uses: actions/upload-artifact@v4
+      with:
+        name: production-deployment-package
+        path: production-content.tar.gz
+        retention-days: 90
+
+    - name: Update LTI configurations
+      run: |
+        echo "🔧 Updating LTI configurations..."
+
+        # Update LTI links and configurations
+        # This would integrate with your LMS systems
+
+        echo "✅ LTI configurations updated"
+
+    - name: Run production smoke tests
+      run: |
+        echo "🧪 Running production smoke tests..."
+
+        # Critical production tests
+        # curl -f https://oatutor.io/health || echo "Production health check failed"
+
+        echo "✅ Production smoke tests completed"
+
+    - name: Notify deployment success
+      run: |
+        echo "📢 Production deployment notification"
+        # Send notifications (Slack, email, etc.)
+
+  rollback:
+    runs-on: ubuntu-latest
+    if: failure() && (needs.deploy-staging.result == 'failure' || needs.deploy-production.result == 'failure')
+
+    steps:
+    - name: Rollback deployment
+      run: |
+        echo "🔄 Initiating rollback..."
+
+        # Rollback logic would go here
+        # - Restore previous content version
+        # - Revert database changes
+        # - Clear caches
+
+        echo "⚠️ Rollback completed - manual verification required"

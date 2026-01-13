@@ -33,7 +33,7 @@ def start_driver():
     options.add_argument("--disable-extensions")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option('useAutomationExtension', False)
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager(version="107.0.5304.62").install()), options=options)
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
     driver.maximize_window()
     return driver
 
